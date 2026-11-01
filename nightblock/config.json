@@ -1,0 +1,38 @@
+{
+  "_comment": "Edit with: sudo nano '/Library/Application Support/nightblock/config.json'  (or sudo nightblock allow <host>). Changes apply within a minute. cover_apps are hidden (Cmd-H style, not quit) every few seconds during the block.",
+  "block_start": "00:00",
+  "block_end": "06:00",
+  "override_minutes": 60,
+  "proxy_port": 8899,
+  "allow_root_processes": true,
+  "allow_hosts": [
+    "docs.google.com",
+    "sheets.googleapis.com",
+    "script.google.com",
+    "script.googleusercontent.com",
+    "*.googleusercontent.com",
+    "*.gstatic.com",
+    "fonts.googleapis.com",
+    "accounts.google.com",
+    "apis.google.com",
+    "clients?.google.com",
+    "ogs.google.com"
+  ],
+  "direct_hosts": [
+    "api.anthropic.com",
+    "api.ouraring.com",
+    "cloud.ouraring.com",
+    "api.open-meteo.com",
+    "archive-api.open-meteo.com",
+    "geocoding-api.open-meteo.com",
+    "console.anthropic.com",
+    "platform.claude.com"
+  ],
+  "cover_apps": [
+    "Filtered Twitter",
+    "Slack",
+    "Discord",
+    "WhatsApp",
+    "Signal"
+  ]
+}
