@@ -19,14 +19,11 @@
     "ogs.google.com"
   ],
   "direct_hosts": [
-    "api.anthropic.com",
     "api.ouraring.com",
     "cloud.ouraring.com",
     "api.open-meteo.com",
     "archive-api.open-meteo.com",
-    "geocoding-api.open-meteo.com",
-    "console.anthropic.com",
-    "platform.claude.com"
+    "geocoding-api.open-meteo.com"
   ],
   "cover_apps": [
     "Filtered Twitter",

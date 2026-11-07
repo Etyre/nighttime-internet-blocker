@@ -1,5 +1,7 @@
-// Asks the local nightblock proxy for the current state every 30 s (and whenever a tab finishes loading),
-// then lays an opaque panel over every tab whose host is not on the allowlist. Nothing is closed or reloaded.
+// Chrome extension for nightblock. Asks the local nightblock proxy for the current state every 30 s (and
+// whenever a tab finishes loading), then lays an opaque panel over every tab whose host is not on the allowlist.
+// Nothing is closed or reloaded. No config or logs of its own: state and the allowlist come from
+// http://127.0.0.1:8899/__nightblock__/state; if the proxy is down every tab is treated as open.
 const STATE_URL = "http://127.0.0.1:8899/__nightblock__/state";
 let cache = { at: 0, st: null };
 

@@ -1,7 +1,10 @@
 // Menu bar item for nightblock. A moon that fills in while the block is on; the menu has the override.
+// Reads state with `/usr/local/bin/nightblock state-json`; config changes go through `nightblock config-add/remove`
+// as admin. Its only own storage is UserDefaults (com.elityre.nightblock.menu): the unsent text of the Add… field.
+// Logs: none of its own; nightblock logs the changes to /Library/Logs/nightblock/nightblock.log.
 import Cocoa
 
-final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, NSTextFieldDelegate {
     var item: NSStatusItem!
     let menu = NSMenu()
     let header = NSMenuItem(title: "Night block", action: nil, keyEquivalent: "")
@@ -121,6 +124,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if a.runModal() == .alertFirstButtonReturn { runAsAdmin(["config-remove", pair[0], pair[1]]) }
     }
 
+    // Drafts are never lost: whatever is typed into the Add… field is saved to UserDefaults on every change,
+    // keyed by which list it is for, restored the next time that dialog opens, and cleared only once the
+    // change was actually applied (cancelling the dialog or the admin-password prompt keeps it).
+    var draftKey = ""
+
     @objc func addEntry(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String, let sec = sections.first(where: { $0.key == key }) else { return }
         NSApp.activate(ignoringOtherApps: true)
@@ -129,17 +137,28 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         a.informativeText = sec.prompt
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
         field.placeholderString = sec.hint
+        draftKey = "draft.exceptions.add." + key
+        field.stringValue = UserDefaults.standard.string(forKey: draftKey) ?? ""
+        field.delegate = self
         a.accessoryView = field
         a.addButton(withTitle: "Add")
         a.addButton(withTitle: "Cancel")
         a.window.initialFirstResponder = field
         if a.runModal() == .alertFirstButtonReturn {
             let v = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !v.isEmpty { runAsAdmin(["config-add", key, v]) }
+            if !v.isEmpty, runAsAdmin(["config-add", key, v]) {
+                UserDefaults.standard.removeObject(forKey: draftKey)
+            }
         }
     }
 
-    func runAsAdmin(_ args: [String]) {
+    func controlTextDidChange(_ n: Notification) {
+        guard let f = n.object as? NSTextField, !draftKey.isEmpty else { return }
+        UserDefaults.standard.set(f.stringValue, forKey: draftKey)
+    }
+
+    @discardableResult
+    func runAsAdmin(_ args: [String]) -> Bool {
         // Native admin-password dialog; the change is logged by nightblock and applied within a minute.
         let quoted = (["/usr/bin/python3", "/usr/local/bin/nightblock"] + args)
             .map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }.joined(separator: " ")
@@ -153,6 +172,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             a.runModal()
         }
         refresh()
+        return err == nil
     }
 
     @objc func doEditConfig() { runCommandFile("edit-config") }

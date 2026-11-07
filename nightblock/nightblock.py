@@ -2,6 +2,11 @@
 """
 nightblock - a midnight-to-6am internet block for macOS.
 
+Installed copy: /usr/local/bin/nightblock (this file). Config: /Library/Application Support/nightblock/config.json
+(root-owned; state.json, override.json, force.json next to it). Logs: /Library/Logs/nightblock/ (nightblock.log,
+proxy.log, overrides.log, cover.log; every line timestamped). NIGHTBLOCK_APP_DIR / NIGHTBLOCK_LOG_DIR override
+both directories for a no-root dry run.
+
 Subcommands
   status              what is blocked right now, override/force state, proxy health, recent denials
   check <host>        would <host> be reachable during the block, and how
@@ -822,7 +827,7 @@ def status_main():
     print("  - in Chrome/Electron apps, via the proxy, these hostnames:")
     for h in c["allow_hosts"]:
         print("      %s" % h)
-    print("  - from any app (Python, Node, Claude Code), these hosts, by IP (TCP 443):")
+    print("  - from any app (Python, Node, curl), these hosts, by IP (TCP 443):")
     res = st.get("resolved", {})
     for h in c["direct_hosts"]:
         print("      %-34s %d IPs known" % (h, len(res.get(h, {}))))
@@ -832,7 +837,7 @@ def status_main():
     if c["cover_apps"]:
         print("Hidden from the screen while blocked: %s" % ", ".join(c["cover_apps"]))
     print("Chrome tabs on other hosts are covered by the nightblock extension (chrome://extensions must show it enabled).")
-    print("Everything else is blocked: other websites, Filtered Twitter, Slack, mail sync, Toggl/Sheets sync in Task Tracker, ...")
+    print("Everything else is blocked: other websites, Claude Code and the Anthropic API, Filtered Twitter, Slack, mail sync, Toggl/Sheets sync in Task Tracker, ...")
     den = tail_denied(15)
     if den:
         print()

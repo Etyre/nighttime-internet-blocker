@@ -44,10 +44,14 @@ if ! dscl . -read /Users/$PROXY_USER >/dev/null 2>&1; then
 fi
 
 # 3. Files
+# The shipped defaults are nightblock/config.example.json (committed). A local nightblock/config.json
+# (gitignored) wins if present. On reinstall only missing keys are added; existing lists are left alone.
+SEED="$HERE/nightblock/config.example.json"
+[ -f "$HERE/nightblock/config.json" ] && SEED="$HERE/nightblock/config.json"
 mkdir -p "$APP_DIR" "$LOG_DIR"
 chmod 755 "$APP_DIR" "$LOG_DIR"
 if [ -f "$APP_DIR/config.json" ]; then
-  "$PY" - "$HERE/nightblock/config.json" "$APP_DIR/config.json" <<'MERGE'
+  "$PY" - "$SEED" "$APP_DIR/config.json" <<'MERGE'
 import json, sys
 new, cur_p = json.load(open(sys.argv[1])), sys.argv[2]
 cur = json.load(open(cur_p))
@@ -56,7 +60,7 @@ for k, v in new.items():
 json.dump(cur, open(cur_p, "w"), indent=2)
 MERGE
 else
-  cp "$HERE/nightblock/config.json" "$APP_DIR/config.json"
+  cp "$SEED" "$APP_DIR/config.json"
 fi
 chmod 644 "$APP_DIR/config.json"
 install -m 755 -o root -g wheel "$HERE/nightblock/nightblock.py" "$BIN"

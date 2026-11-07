@@ -1,3 +1,15 @@
 .DS_Store
 build/
 __pycache__/
+*.pyc
+.venv/
+node_modules/
+dist/
+out/
+*.log
+# local override of the shipped defaults (install.sh prefers it over config.example.json)
+nightblock/config.json
+# runtime state is written under /Library/Application Support/nightblock, never here
+state.json
+override.json
+force.json
