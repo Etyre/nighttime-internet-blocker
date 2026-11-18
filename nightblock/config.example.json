@@ -25,6 +25,7 @@
     "archive-api.open-meteo.com",
     "geocoding-api.open-meteo.com"
   ],
+  "tailnet_hosts": [],
   "cover_apps": [
     "Filtered Twitter",
     "Slack",

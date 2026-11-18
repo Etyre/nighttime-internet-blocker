@@ -17,6 +17,16 @@ Three launchd jobs plus two small apps and a Chrome extension:
 - Firewall: a `pf` anchor `nightblock` that blocks all outbound traffic except loopback, DNS/NTP/DHCP,
   link-local/multicast, sockets owned by root or by `_nightproxy`, and TCP 443 to the IPs of
   `direct_hosts` (re-resolved every minute; every IP seen in the last 36 h stays allowed).
+- Tailscale machines (added 2026-11-18, when the executive-assistant agent moved to a server): each
+  `tailnet_hosts` entry is `name:port`, and the firewall opens that one TCP port on that machine's Tailscale
+  address for every app; the proxy does the same for apps that use the system proxy (the Atlas Mac app does),
+  under the full name and the short one (`atlas`). The machine's other ports stay closed, so ssh to it is not a
+  way round the block. A name that resolves outside Tailscale's ranges (100.64.0.0/10, fd7a:115c:a1e0::/48) is
+  ignored and logged. While the list is not empty the firewall also lets the Tailscale client keep its tunnel
+  up: TCP 443 to its coordination servers (`controlplane.tailscale.com`, `login.tailscale.com`), TCP 443 and
+  UDP 3478 to its relay servers (the daemon fetches the list from `login.tailscale.com/derpmap/default` once a
+  day and keeps the last good copy in `state.json`), and UDP to port 41641 anywhere (the port a Tailscale
+  machine with a public address listens on).
 - Proxy: `com.elityre.nightblock-proxy` (LaunchDaemon, user `_nightproxy`) on 127.0.0.1:8899. During the
   block the system HTTP/HTTPS proxy on every network service points at it, and it completes connections
   only to `allow_hosts` + `direct_hosts`. Previous proxy settings are saved and restored at 06:00. It also
@@ -35,6 +45,9 @@ Three launchd jobs plus two small apps and a Chrome extension:
 | Anything on this Mac: localhost, `*.test`, `*.local`, and `/etc/hosts` loopback names such as Sleep Bandit at `sleepbandit.test:8777`, Task Tracker (8791), Roam local | works, in Chrome too (never covered) |
 | Google Docs/Sheets in Chrome (daily checklist) | works, via the local proxy, allowlisted by hostname |
 | Oura and Open-Meteo APIs (Sleep Bandit's ring and weather data) | work, from any app, by IP |
+| Machines in `tailnet_hosts`, on their one listed port (the agent's server, `atlas.<tailnet>.ts.net:8800`: Atlas Mac app, web chat) | work, from any app, over Tailscale |
+| Everything else on the Tailscale network (other machines, other ports, exit nodes) | **blocked** |
+| Connections from a Tailscale machine into this Mac (the agent's bridge on :8799) | work (inbound is never blocked) |
 | Backblaze and macOS system updates (run as root) | work |
 | DNS, NTP, Bonjour | work |
 | Task Tracker's Toggl / Google Sheets sync (Python, not proxy-aware) | blocked until 06:00 |
@@ -58,7 +71,7 @@ Three launchd jobs plus two small apps and a Chrome extension:
 while blocked (a moon in a circle means nightblock is not installed or not responding). Its menu shows the state
 and the time of the next change, and has **Override…**, which opens Terminal straight into `nightblock override`.
 `Night Block Override.app` in the Dock does the same thing with one click. The menu's **Exceptions** submenu
-lists the allowed websites, the API hosts open to every app, and the apps hidden during the block; click an
+lists the allowed websites, the API hosts open to every app, the Tailscale machines, and the apps hidden during the block; click an
 entry to remove it or use "Add…" to add one. Changes go through the macOS administrator-password dialog and take
 effect within a minute. Text typed into an "Add…" field is saved as you type (UserDefaults) and comes back the
 next time that dialog opens; it is cleared only once the entry was actually added. Both apps are built by
@@ -117,7 +130,8 @@ nightblock denied                 # recently refused hostnames, for tuning the a
 nightblock override               # lift the block for 60 min (asks nothing else; you type the paragraph)
 sudo nightblock allow HOST        # add a hostname pattern (fnmatch: *.example.com) to the proxy allowlist
 sudo nightblock disallow HOST
-sudo nightblock config-add direct_hosts HOST      # lists: allow_hosts | direct_hosts | cover_apps
+sudo nightblock config-add direct_hosts HOST      # lists: allow_hosts | direct_hosts | tailnet_hosts | cover_apps
+sudo nightblock config-add tailnet_hosts atlas.tail5a9488.ts.net:8800   # a Tailscale machine, one port
 sudo nightblock config-remove direct_hosts HOST
 sudo nightblock force-block 5     # test: block right now for 5 minutes
 sudo nightblock force-off
@@ -141,6 +155,9 @@ sudo nightblock force-off
 D=$(mktemp -d); cp nightblock/config.example.json $D/config.json
 NIGHTBLOCK_APP_DIR=$D NIGHTBLOCK_LOG_DIR=$D /usr/bin/python3 nightblock/nightblock.py status
 NIGHTBLOCK_APP_DIR=$D NIGHTBLOCK_LOG_DIR=$D /usr/bin/python3 nightblock/nightblock.py check api.anthropic.com
+# during a real block, the agent's server must answer and its other ports must not:
+curl -m 8 http://atlas.tail5a9488.ts.net:8800/health        # JSON
+curl -m 8 http://atlas.tail5a9488.ts.net:22/                # "Couldn't connect" at once
 ```
 
 Logs and state:
@@ -193,6 +210,14 @@ folder. After editing `background.js`, click the reload arrow on its card.
   Anything a script needs must be in `direct_hosts`.
 - The Dock applet shows the generic script icon unless `Assets.car` is deleted after `osacompile`
   (`menubar/build.sh` does this).
+- Tailscale traffic is blocked like everything else unless listed: the App Store Tailscale client runs as the
+  user, so pf refuses both its packets to the internet and anything sent into the tunnel. Before `tailnet_hosts`
+  existed (2026-11-18) the Atlas app showed "waiting for a connection" every night while the server could still
+  call into the Mac, because inbound traffic is never blocked and its replies ride the same connection.
+- `tailnet_hosts` is not in `config.example.json` with a value, because the repository is public: add the
+  machine once with `sudo nightblock config-add tailnet_hosts NAME:PORT` or the menu.
+- `pfctl -nf FILE` checks a rules file without root and without loading it; the anchor nightblock would write
+  can be tested that way (`anchor_rules()` in a Python shell with `NIGHTBLOCK_APP_DIR` set to a scratch folder).
 - `sudo pfctl -d` or editing the proxy settings by hand lasts at most a minute: the reconciler puts them back.
 - The root daemon runs Apple's `/usr/bin/python3` (needs Command Line Tools), not Homebrew's, so a root process
   never executes user-writable code.

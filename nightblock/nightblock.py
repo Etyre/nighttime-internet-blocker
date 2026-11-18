@@ -18,7 +18,7 @@ Subcommands
   state-json          one JSON line with the current state (used by the menu bar app)
   allow <host>        (root) add a hostname pattern to allow_hosts
   disallow <host>     (root) remove it
-  config-add <list> <value>      (root) list = allow_hosts | direct_hosts | cover_apps
+  config-add <list> <value>      (root) list = allow_hosts | direct_hosts | tailnet_hosts | cover_apps
   config-remove <list> <value>   (root)
   force-block <min>   (root) block now for <min> minutes regardless of the clock, for testing
   force-off           (root) cancel force-block
@@ -28,6 +28,8 @@ Mechanics: a pf anchor blocks all outbound traffic except loopback, DNS/NTP/DHCP
 multicast, sockets owned by root (Backblaze, system updaters), sockets owned by _nightproxy, and
 TCP/443 to the resolved IPs of direct_hosts. The system HTTP/HTTPS proxy is pointed at the local
 allowlist proxy, so Chrome and Electron apps can still reach allow_hosts by name.
+tailnet_hosts ("name:port", machines on the Tailscale network such as the server the assistant runs on)
+are opened on that one port for every app, together with what Tailscale itself needs to keep the tunnel up.
 """
 import asyncio
 import datetime as dt
@@ -62,6 +64,15 @@ LOG = os.path.join(LOG_DIR, "nightblock.log")
 PROXY_LOG = os.path.join(LOG_DIR, "proxy.log")
 OVERRIDE_LOG = os.path.join(LOG_DIR, "overrides.log")
 RESOLVED_TTL = 36 * 3600  # keep an IP in the firewall table this long after it was last seen
+# Tailscale's own address ranges: a tailnet_hosts name must resolve inside them, so the list can never open
+# an ordinary internet host on an arbitrary port.
+TAILNET_NETS = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
+# What the Tailscale client (it runs as the user, so pf blocks it like any app) needs to keep a tunnel up
+# across network changes: its coordination server, and the relay ("DERP") servers listed in DERP_MAP_URL.
+TAILSCALE_CONTROL = ("controlplane.tailscale.com", "login.tailscale.com")
+DERP_MAP_URL = "https://login.tailscale.com/derpmap/default"
+DERP_MAP_TTL = 24 * 3600
+DERP_MAP_RETRY = 600
 
 PARAGRAPH = (
     "It is after midnight and I am turning the internet back on. I have thought about why I want this "
@@ -115,6 +126,7 @@ def config():
         data.setdefault("allow_root_processes", True)
         data.setdefault("allow_hosts", [])
         data.setdefault("direct_hosts", [])
+        data.setdefault("tailnet_hosts", [])
         data.setdefault("cover_apps", [])
         _cfg_cache.update(mtime=m, data=data)
     return _cfg_cache["data"]
@@ -210,11 +222,39 @@ def is_local_host(host):
     return local
 
 
-def host_allowed_by_proxy(host):
+def tailnet_entries():
+    """tailnet_hosts as (host, port) pairs; entries that are not "name:port" are skipped."""
+    out = []
+    for e in config()["tailnet_hosts"]:
+        host, _, port = str(e).strip().lower().rpartition(":")
+        if host and port.isdigit():
+            out.append((host.strip("[]"), int(port)))
+    return out
+
+
+def tailnet_names(host):
+    """The names a tailnet host answers to: as configured, and MagicDNS's short form (atlas.x.ts.net -> atlas)."""
+    return {host, host.split(".")[0]} if host.endswith(".ts.net") else {host}
+
+
+def resolves_inside_tailnet(host):
+    """True when every address of host is a Tailscale one. The proxy's sockets pass the firewall, so it has
+    to make the same check the firewall rules are built with."""
+    try:
+        addrs = {sa[0] for _, _, _, _, sa in socket.getaddrinfo(host, 80, proto=socket.IPPROTO_TCP)}
+        return bool(addrs) and all(any(ipaddress.ip_address(a) in n for n in TAILNET_NETS) for a in addrs)
+    except (socket.gaierror, ValueError):
+        return False
+
+
+def host_allowed_by_proxy(host, port=None):
     host = host.lower().rstrip(".")
     if is_local_host(host):
         return True
     c = config()
+    for th, tp in tailnet_entries():
+        if host in tailnet_names(th) and port in (None, tp):
+            return resolves_inside_tailnet(host)
     for pat in list(c["allow_hosts"]) + list(c["direct_hosts"]):
         if fnmatch.fnmatchcase(host, pat.lower()):
             return True
@@ -262,7 +302,84 @@ def resolve_direct_hosts(state):
     return ips
 
 
-def anchor_rules(ips):
+def resolve_tailnet(state):
+    """[(ip, port)] for tailnet_hosts. Addresses outside Tailscale's ranges are ignored (and logged)."""
+    now = time.time()
+    seen = state.setdefault("resolved_tailnet", {})
+    entries = tailnet_entries()
+    for host, port in entries:
+        entry = seen.setdefault(host, {})
+        try:
+            for _, _, _, _, sa in socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP):
+                if any(ipaddress.ip_address(sa[0]) in n for n in TAILNET_NETS):
+                    entry[sa[0]] = now
+                elif now - state.get("tailnet_warned", 0) > 3600:
+                    state["tailnet_warned"] = now
+                    log("tailnet_hosts: %s resolves to %s, not a Tailscale address; ignored" % (host, sa[0]))
+        except (socket.gaierror, ValueError):
+            pass
+        for ip in [ip for ip, ts in entry.items() if now - ts > RESOLVED_TTL]:
+            del entry[ip]
+    hosts = {h for h, _ in entries}
+    for host in [h for h in seen if h not in hosts]:
+        del seen[host]
+    return sorted({(ip, port) for host, port in entries for ip in seen.get(host, {})})
+
+
+def _ips_in(obj, out):
+    """Collect every IPv4/IPv6 value in the DERP map, whatever its exact shape."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in ("IPv4", "IPv6") and isinstance(v, str):
+                try:
+                    out.add(str(ipaddress.ip_address(v)))
+                except ValueError:
+                    pass
+            else:
+                _ips_in(v, out)
+    elif isinstance(obj, list):
+        for v in obj:
+            _ips_in(v, out)
+
+
+def resolve_tailscale(state):
+    """IPs of Tailscale's coordination and relay servers, or [] when no tailnet host is configured."""
+    if not tailnet_entries():
+        state.pop("tailscale", None)
+        return []
+    now = time.time()
+    ts = state.setdefault("tailscale", {})
+    control = ts.setdefault("control", {})
+    for host in TAILSCALE_CONTROL:
+        try:
+            for _, _, _, _, sa in socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP):
+                control[sa[0]] = now
+        except socket.gaierror:
+            pass
+    for ip in [ip for ip, t in control.items() if now - t > RESOLVED_TTL]:
+        del control[ip]
+    # The relay list changes rarely: fetch it once a day (this runs as root, which the block lets through) and
+    # keep the last good copy for as long as fetching fails.
+    stale = now - ts.get("derp_at", 0) > DERP_MAP_TTL
+    if stale and now - ts.get("derp_tried", 0) > DERP_MAP_RETRY:
+        ts["derp_tried"] = now
+        r = run(["/usr/bin/curl", "-fsS", "--max-time", "8", DERP_MAP_URL])
+        found = set()
+        try:
+            _ips_in(json.loads(r.stdout), found)
+        except ValueError:
+            pass
+        if found:
+            ts["derp"] = sorted(found)
+            ts["derp_at"] = now
+            log("tailscale: relay list refreshed, %d addresses" % len(found))
+        else:
+            log("ERROR tailscale: could not fetch the relay list (rc=%d) %s; keeping %d known addresses"
+                % (r.returncode, r.stderr.strip()[:200], len(ts.get("derp", []))))
+    return sorted(set(control) | set(ts.get("derp", [])))
+
+
+def anchor_rules(ips, tailnet=(), tailscale_ips=()):
     c = config()
     uid = proxy_uid()
     lines = [
@@ -280,6 +397,16 @@ def anchor_rules(ips):
     if c["allow_root_processes"]:
         lines.append("pass out quick all user = 0")
     lines.append("pass out quick proto tcp from any to <night_allow> port 443")
+    for ip, port in tailnet:
+        lines.append("pass out quick proto tcp from any to %s port %d" % (ip, port))
+    if tailnet:
+        # Tailscale's coordination and relay servers (443, and 3478 for the relay's address discovery), and
+        # 41641, the port a Tailscale machine with a public address listens on, for the direct tunnel.
+        if tailscale_ips:
+            lines.insert(2, "table <night_tailscale> persist { %s }" % " ".join(tailscale_ips))
+            lines.append("pass out quick proto tcp from any to <night_tailscale> port 443")
+            lines.append("pass out quick proto udp from any to <night_tailscale> port 3478")
+        lines.append("pass out quick proto udp from any to any port 41641")
     lines.append("block return out quick all")
     return "\n".join(lines) + "\n"
 
@@ -316,7 +443,7 @@ def pf_ensure_main():
 
 def pf_apply_block(state):
     ips = resolve_direct_hosts(state)
-    rules = anchor_rules(ips)
+    rules = anchor_rules(ips, resolve_tailnet(state), resolve_tailscale(state))
     pf_ensure_main()
     if not pf_enabled():
         state["we_enabled_pf"] = True
@@ -492,7 +619,8 @@ async def _handle(reader, writer):
             until = (active_until(FORCE) or next_boundary()) if st == "blocked" else next_boundary()
             c = config()
             body = json.dumps({"state": st, "why": why, "until": until.strftime("%-I:%M %p"),
-                               "allow": list(c["allow_hosts"]) + list(c["direct_hosts"]),
+                               "allow": list(c["allow_hosts"]) + list(c["direct_hosts"])
+                                        + sorted({n for h, _ in tailnet_entries() for n in tailnet_names(h)}),
                                "local": loopback_hosts_from_etc_hosts()}).encode()
             writer.write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
                           "Cache-Control: no-store\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % len(body)).encode() + body)
@@ -518,7 +646,7 @@ async def _handle(reader, writer):
         host = host.strip("[]").lower()
 
         state, _ = desired_state()
-        allowed = state == "open" or host_allowed_by_proxy(host)
+        allowed = state == "open" or host_allowed_by_proxy(host, port)
         if not allowed:
             now = time.time()
             if now - _denied_recent.get(host, 0) > 60:
@@ -831,13 +959,19 @@ def status_main():
     res = st.get("resolved", {})
     for h in c["direct_hosts"]:
         print("      %-34s %d IPs known" % (h, len(res.get(h, {}))))
+    if tailnet_entries():
+        print("  - from any app, over Tailscale, these machines on that one port (and Tailscale's own servers):")
+        rt = st.get("resolved_tailnet", {})
+        for h, p in tailnet_entries():
+            print("      %-34s %s" % ("%s:%d" % (h, p), ", ".join(sorted(rt.get(h, {}))) or "address not known yet"))
+        print("      Tailscale relay addresses known: %d" % len(st.get("tailscale", {}).get("derp", [])))
     if c["allow_root_processes"]:
         print("  - processes running as root (Backblaze bztransmit/bzserv, macOS updaters)")
     print("  - DNS, NTP, DHCP, Bonjour/link-local")
     if c["cover_apps"]:
         print("Hidden from the screen while blocked: %s" % ", ".join(c["cover_apps"]))
     print("Chrome tabs on other hosts are covered by the nightblock extension (chrome://extensions must show it enabled).")
-    print("Everything else is blocked: other websites, Claude Code and the Anthropic API, Filtered Twitter, Slack, mail sync, Toggl/Sheets sync in Task Tracker, ...")
+    print("Everything else is blocked: other websites, Filtered Twitter, Slack, mail sync, Toggl/Sheets sync in Task Tracker, ...")
     den = tail_denied(15)
     if den:
         print()
@@ -849,10 +983,16 @@ def status_main():
 def check_main(host):
     host = host.lower()
     c = config()
+    name, _, port = host.rpartition(":")
+    name = name if port.isdigit() else host   # "atlas.x.ts.net:8800" or just the name
+    ports = sorted(tp for th, tp in tailnet_entries() if name in tailnet_names(th))
     via_proxy = host_allowed_by_proxy(host)
     direct = host in [h.lower() for h in c["direct_hosts"]]
     if is_local_host(host):
         print("%s: ALLOWED for every app, always (it lives on this Mac; loopback traffic is never blocked)." % host)
+    elif ports:
+        print("%s: ALLOWED for every app over Tailscale, on port %s only; its other ports are blocked."
+              % (name, ", ".join(map(str, ports))))
     elif direct:
         print("%s: ALLOWED for every app (firewall opens its IPs on 443) and via the proxy." % host)
     elif via_proxy:
@@ -861,7 +1001,7 @@ def check_main(host):
         print("%s: BLOCKED during the window." % host)
 
 
-LISTS = ("allow_hosts", "direct_hosts", "cover_apps")
+LISTS = ("allow_hosts", "direct_hosts", "tailnet_hosts", "cover_apps")
 
 
 def edit_list(name, value, add):
@@ -871,6 +1011,8 @@ def edit_list(name, value, add):
     value = value.strip()
     if not value:
         sys.exit("empty value")
+    if name == "tailnet_hosts" and add and not re.match(r"^[^:\s]+:\d+$", value):
+        sys.exit("tailnet_hosts entries are name:port, e.g. atlas.example.ts.net:8800")
     c = read_json(CONFIG, {}) or {}
     lst = c.setdefault(name, [])
     if add and value not in lst:
@@ -909,7 +1051,8 @@ def main(argv):
         until = (active_until(FORCE) or next_boundary()) if st == "blocked" else next_boundary()
         print(json.dumps({"state": st, "why": why, "until": until.strftime("%-I:%M %p"),
                           "proxy": proxy_listening(), "allow_hosts": c["allow_hosts"],
-                          "direct_hosts": c["direct_hosts"], "cover_apps": c["cover_apps"]}))
+                          "direct_hosts": c["direct_hosts"], "tailnet_hosts": c["tailnet_hosts"],
+                          "cover_apps": c["cover_apps"]}))
     elif cmd == "config-add" and len(argv) > 3:
         edit_list(argv[2], argv[3], True)
     elif cmd == "config-remove" and len(argv) > 3:
