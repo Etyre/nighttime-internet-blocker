@@ -205,6 +205,8 @@ folder. After editing `background.js`, click the reload arrow on its card.
   proxy refused so the allowlist can be tuned; patterns are fnmatch (`*.gstatic.com`, `clients?.google.com`).
 - Python/Node/curl are not proxy-aware, so hosts in `allow_hosts` only work from Chrome and Electron apps.
   Anything a script needs must be in `direct_hosts`.
+- The Dock stores an app's path percent-encoded (`Night%20Block%20Override.app`). `install.sh` looked for the
+  name with spaces, never found it, and added another Dock tile on every install (three by 2026-11-18).
 - The Dock applet shows the generic script icon unless `Assets.car` is deleted after `osacompile`
   (`menubar/build.sh` does this).
 - Tailscale needs two things from the firewall, not one: the App Store client runs as the user, so pf refuses

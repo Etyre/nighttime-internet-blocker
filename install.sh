@@ -147,8 +147,8 @@ if [ -d "$HERE/build/Night Block.app" ]; then
 PLIST
   chmod 644 /Library/LaunchAgents/com.elityre.nightblock-menu.plist; chown root:wheel /Library/LaunchAgents/com.elityre.nightblock-menu.plist
   load_daemon gui/$(id -u "$OWNER") com.elityre.nightblock-menu /Library/LaunchAgents/com.elityre.nightblock-menu.plist || true
-  # Dock: add the override app once
-  if ! sudo -u "$OWNER" defaults read com.apple.dock persistent-apps 2>/dev/null | grep -q "Night Block Override.app"; then
+  # Dock: add the override app once (the Dock stores the path percent-encoded; match that form)
+  if ! sudo -u "$OWNER" defaults read com.apple.dock persistent-apps 2>/dev/null | grep -q "Night%20Block%20Override.app"; then
     sudo -u "$OWNER" defaults write com.apple.dock persistent-apps -array-add \
       '<dict><key>tile-data</key><dict><key>file-data</key><dict><key>_CFURLString</key><string>file:///Applications/Night%20Block%20Override.app/</string><key>_CFURLStringType</key><integer>15</integer></dict></dict></dict>'
     sudo -u "$OWNER" killall Dock 2>/dev/null || true
