@@ -52,7 +52,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, NSTextFieldDel
               let state = j["state"] as? String else { setUnknown(); return }
         let until = j["until"] as? String ?? "?"
         let why = j["why"] as? String ?? ""
-        for k in ["allow_hosts", "direct_hosts", "tailnet_hosts", "cover_apps"] { lists[k] = j[k] as? [String] ?? [] }
+        for k in ["allow_hosts", "direct_hosts", "cover_apps"] { lists[k] = j[k] as? [String] ?? [] }
         rebuildExceptions()
         blocked = state == "blocked"
         setIcon(symbol: blocked ? "moon.zzz.fill" : "moon")
@@ -85,8 +85,6 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate, NSTextFieldDel
                 prompt: "Hostname to allow in Chrome during the block", hint: "e.g. docs.google.com or *.gstatic.com"),
         Section(key: "direct_hosts", title: "API hosts allowed for every app", addTitle: "Add API host…",
                 prompt: "Hostname to open in the firewall for all apps (by IP, port 443)", hint: "e.g. api.ouraring.com"),
-        Section(key: "tailnet_hosts", title: "Tailscale machines allowed for every app", addTitle: "Add Tailscale machine…",
-                prompt: "Machine on your Tailscale network and the one port to open, as name:port", hint: "e.g. atlas.example.ts.net:8800"),
         Section(key: "cover_apps", title: "Apps hidden while blocked", addTitle: "Add app…",
                 prompt: "Application name exactly as shown in the menu bar", hint: "e.g. Slack"),
     ]
