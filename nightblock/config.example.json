@@ -16,14 +16,21 @@
     "accounts.google.com",
     "apis.google.com",
     "clients?.google.com",
-    "ogs.google.com"
+    "ogs.google.com",
+    "*.toggl.com"
   ],
   "direct_hosts": [
     "api.ouraring.com",
     "cloud.ouraring.com",
     "api.open-meteo.com",
     "archive-api.open-meteo.com",
-    "geocoding-api.open-meteo.com"
+    "geocoding-api.open-meteo.com",
+    "track.toggl.com",
+    "api.track.toggl.com",
+    "desktop.track.toggl.com",
+    "sync.toggl.com",
+    "accounts.toggl.com",
+    "web-assets.track.toggl.com"
   ],
   "allow_tailnet": true,
   "cover_apps": [

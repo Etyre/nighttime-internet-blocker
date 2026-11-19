@@ -49,7 +49,8 @@ Three launchd jobs plus two small apps and a Chrome extension:
 | Connections from a Tailscale machine into this Mac (the agent's bridge on :8799) | work (inbound is never blocked) |
 | Backblaze and macOS system updates (run as root) | work |
 | DNS, NTP, Bonjour | work |
-| Task Tracker's Toggl / Google Sheets sync (Python, not proxy-aware) | blocked until 06:00 |
+| Toggl Track: the web app in Chrome, the desktop app, and the API for scripts (Task Tracker's and the Focus Monitor's Toggl sync) | works (added 2026-11-19) |
+| Task Tracker's Google Sheets sync (Python, not proxy-aware) | blocked until 06:00 |
 | Claude Code, and anything else on the Anthropic API (Sleep Bandit's night tagging, Task Tracker's LLM plans) | **blocked** until 06:00 |
 
 `nightblock status` prints the live version of this list plus the hosts the proxy refused recently.
@@ -201,6 +202,11 @@ folder. After editing `background.js`, click the reload arrow on its card.
   `launchctl bootout` / `bootstrap` (or `sudo ./install.sh`).
 - The Claude Chrome connector dies during a block (claude.ai is blocked), so verify covers with `screencapture`
   or by eye, not through the browser tool.
+- Toggl needs both lists: `*.toggl.com` in `allow_hosts` for Chrome (the web app pulls from several
+  subdomains), and the named hosts in `direct_hosts` for the desktop app and scripts, because `direct_hosts`
+  takes exact names, not patterns. The desktop app's hosts were read out of its binary
+  (`strings "/Applications/Toggl Track.app/Contents/MacOS/Toggl Track" | grep toggl`): `desktop.track.toggl.com`,
+  `sync.toggl.com`, `accounts.toggl.com`, `track.toggl.com`. If a Toggl update stops syncing at night, rerun that.
 - Only hostname granularity: allowing `docs.google.com` allows all of it. `nightblock denied` shows what the
   proxy refused so the allowlist can be tuned; patterns are fnmatch (`*.gstatic.com`, `clients?.google.com`).
 - Python/Node/curl are not proxy-aware, so hosts in `allow_hosts` only work from Chrome and Electron apps.
