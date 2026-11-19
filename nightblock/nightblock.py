@@ -244,12 +244,13 @@ def resolves_inside_tailnet(host):
 
 def host_allowed_by_proxy(host):
     host = host.lower().rstrip(".")
-    if is_local_host(host):
-        return True
     c = config()
+    # The lists first: they cost nothing, while the two checks after them can need a DNS lookup.
     for pat in list(c["allow_hosts"]) + list(c["direct_hosts"]):
         if fnmatch.fnmatchcase(host, pat.lower()):
             return True
+    if is_local_host(host):
+        return True
     if c["allow_tailnet"] and resolves_inside_tailnet(host):
         _tailnet_seen.add(host)
         return True
