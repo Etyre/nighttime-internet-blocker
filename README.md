@@ -50,6 +50,7 @@ Three launchd jobs plus two small apps and a Chrome extension:
 | Backblaze and macOS system updates (run as root) | work |
 | DNS, NTP, Bonjour | work |
 | Toggl Track: the web app in Chrome, the desktop app, and the API for scripts (Task Tracker's and the Focus Monitor's Toggl sync) | works (added 2026-11-19) |
+| Roam Research: the desktop app and roamresearch.com in Chrome (added 2026-11-19) | works, via the local proxy |
 | Task Tracker's Google Sheets sync (Python, not proxy-aware) | blocked until 06:00 |
 | Claude Code, and anything else on the Anthropic API (Sleep Bandit's night tagging, Task Tracker's LLM plans) | **blocked** until 06:00 |
 
@@ -207,6 +208,15 @@ folder. After editing `background.js`, click the reload arrow on its card.
   takes exact names, not patterns. The desktop app's hosts were read out of its binary
   (`strings "/Applications/Toggl Track.app/Contents/MacOS/Toggl Track" | grep toggl`): `desktop.track.toggl.com`,
   `sync.toggl.com`, `accounts.toggl.com`, `track.toggl.com`. If a Toggl update stops syncing at night, rerun that.
+- Roam is more than `roamresearch.com`: the graph itself lives in Firebase, on `firescript-577a2.firebaseio.com`
+  and numbered shard hosts (`s-gke-usc1-nssi4-12.firebaseio.com`) that change, hence `*.firebaseio.com`; sign-in
+  refresh uses `securetoken.googleapis.com` / `identitytoolkit.googleapis.com` / `www.googleapis.com`, and
+  uploaded images `firebasestorage.googleapis.com`. All found in `nightblock denied` (the first one 101 times).
+  They are in `allow_hosts` only, so the Roam app (Electron) and Chrome reach them and scripts do not.
+- The proxy is one event loop: a blocking call in it stalls every connection. A DNS lookup added to the allow
+  decision (2026-11-18, the tailnet check) made unrelated requests hang for 5-10 s whenever some name resolved
+  slowly; the decision now runs in a thread and caches for 60 s. A host with a dead IPv6 address
+  (`s-gke-...firebaseio.com` on a network without IPv6) hung the same way until `happy_eyeballs_delay` was set.
 - Only hostname granularity: allowing `docs.google.com` allows all of it. `nightblock denied` shows what the
   proxy refused so the allowlist can be tuned; patterns are fnmatch (`*.gstatic.com`, `clients?.google.com`).
 - Python/Node/curl are not proxy-aware, so hosts in `allow_hosts` only work from Chrome and Electron apps.

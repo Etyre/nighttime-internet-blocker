@@ -17,7 +17,14 @@
     "apis.google.com",
     "clients?.google.com",
     "ogs.google.com",
-    "*.toggl.com"
+    "*.toggl.com",
+    "roamresearch.com",
+    "*.roamresearch.com",
+    "*.firebaseio.com",
+    "firebasestorage.googleapis.com",
+    "securetoken.googleapis.com",
+    "identitytoolkit.googleapis.com",
+    "www.googleapis.com"
   ],
   "direct_hosts": [
     "api.ouraring.com",

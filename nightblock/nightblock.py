@@ -209,17 +209,28 @@ def is_local_host(host):
         return True
     if host.endswith((".local", ".localhost", ".test")):
         return True
+    return _where(host) == "local"
+
+
+def _where(host):
+    """'local' (resolves only to loopback), 'tailnet' (only to Tailscale addresses) or 'other'. One lookup
+    answers both questions and is kept for 60 s: on some networks a lookup takes 5 s."""
     now = time.time()
     hit = _local_cache.get(host)
     if hit and now - hit[1] < 60:
         return hit[0]
+    where = "other"
     try:
-        addrs = {sa[0] for _, _, _, _, sa in socket.getaddrinfo(host, 80, proto=socket.IPPROTO_TCP)}
-        local = bool(addrs) and all(ipaddress.ip_address(a.split("%")[0]).is_loopback for a in addrs)
+        addrs = {ipaddress.ip_address(sa[0].split("%")[0])
+                 for _, _, _, _, sa in socket.getaddrinfo(host, 80, proto=socket.IPPROTO_TCP)}
+        if addrs and all(a.is_loopback for a in addrs):
+            where = "local"
+        elif addrs and all(any(a in n for n in TAILNET_NETS) for a in addrs):
+            where = "tailnet"
     except (socket.gaierror, ValueError):
-        local = False
-    _local_cache[host] = (local, now)
-    return local
+        pass
+    _local_cache[host] = (where, now)
+    return where
 
 
 _tailnet_seen = set()  # names the proxy has let through as tailnet machines; told to the Chrome extension
@@ -228,11 +239,7 @@ _tailnet_seen = set()  # names the proxy has let through as tailnet machines; to
 def resolves_inside_tailnet(host):
     """True when every address of host is a Tailscale one (atlas, atlas.x.ts.net, 100.78.78.49). The proxy's
     sockets pass the firewall, so it has to make the firewall's check itself."""
-    try:
-        addrs = {sa[0] for _, _, _, _, sa in socket.getaddrinfo(host, 80, proto=socket.IPPROTO_TCP)}
-        return bool(addrs) and all(any(ipaddress.ip_address(a) in n for n in TAILNET_NETS) for a in addrs)
-    except (socket.gaierror, ValueError):
-        return False
+    return _where(host.lower().rstrip(".")) == "tailnet"
 
 
 def host_allowed_by_proxy(host):
@@ -240,12 +247,12 @@ def host_allowed_by_proxy(host):
     if is_local_host(host):
         return True
     c = config()
-    if c["allow_tailnet"] and resolves_inside_tailnet(host):
-        _tailnet_seen.add(host)
-        return True
     for pat in list(c["allow_hosts"]) + list(c["direct_hosts"]):
         if fnmatch.fnmatchcase(host, pat.lower()):
             return True
+    if c["allow_tailnet"] and resolves_inside_tailnet(host):
+        _tailnet_seen.add(host)
+        return True
     return False
 
 
@@ -609,7 +616,9 @@ async def _handle(reader, writer):
         host = host.strip("[]").lower()
 
         state, _ = desired_state()
-        allowed = state == "open" or host_allowed_by_proxy(host)
+        # In a thread: the decision can do a DNS lookup, and some names take 5 s to resolve (seen 2026-11-19:
+        # news.ycombinator.com). Done inline it froze every other connection through the proxy meanwhile.
+        allowed = state == "open" or await asyncio.get_running_loop().run_in_executor(None, host_allowed_by_proxy, host)
         if not allowed:
             now = time.time()
             if now - _denied_recent.get(host, 0) > 60:
@@ -627,7 +636,8 @@ async def _handle(reader, writer):
             return
 
         try:
-            ur, uw = await asyncio.wait_for(asyncio.open_connection(host, port), 20)
+            # happy_eyeballs_delay: try the next address after 0.25 s instead of waiting out a dead IPv6 one
+            ur, uw = await asyncio.wait_for(asyncio.open_connection(host, port, happy_eyeballs_delay=0.25), 20)
         except (OSError, asyncio.TimeoutError) as e:
             proxy_log("UPSTREAM-FAIL %s:%d %s" % (host, port, e))
             writer.write(_http_response("502 Bad Gateway", "could not reach %s" % host))
