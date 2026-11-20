@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """
 nightblock - a midnight-to-6am internet block for macOS.
 
@@ -118,9 +118,20 @@ def config():
     except OSError:
         m = None
     if m != _cfg_cache["mtime"] or _cfg_cache["data"] is None:
-        data = read_json(CONFIG, {}) or {}
+        data = read_json(CONFIG)
+        if not isinstance(data, dict):
+            if m is not None:
+                log("ERROR config: %s is not valid JSON; using the defaults (nothing allowed) until it is fixed" % CONFIG)
+            data = {}
         data.setdefault("block_start", "00:00")
         data.setdefault("block_end", "06:00")
+        for k, default in (("block_start", "00:00"), ("block_end", "06:00")):
+            try:
+                parse_hhmm(data[k])
+            except (ValueError, AttributeError, TypeError):
+                # an unreadable time used to raise in every reconcile, freezing the block in whatever state it was
+                log("ERROR config: %s = %r is not HH:MM; using %s" % (k, data[k], default))
+                data[k] = default
         data.setdefault("override_minutes", 60)
         data.setdefault("proxy_port", 8899)
         data.setdefault("allow_root_processes", True)
@@ -167,22 +178,39 @@ def active_until(path):
         return None
     try:
         until = dt.datetime.fromisoformat(d["until"])
-    except (KeyError, ValueError):
+    except (KeyError, ValueError, TypeError):
         return None
     return until if until > dt.datetime.now() else None
 
 
-def desired_state():
-    """'blocked' or 'open', plus the reason."""
+def desired_state(now=None):
+    """'blocked' or 'open' at `now` (default: this moment), plus the reason."""
+    now = now or dt.datetime.now()
     ov = active_until(OVERRIDE)
     fo = active_until(FORCE)
-    if ov:
+    if ov and ov > now:
         return "open", "override until %s" % ov.strftime("%H:%M")
-    if fo:
+    if fo and fo > now:
         return "blocked", "force-block until %s" % fo.strftime("%H:%M")
-    if in_window():
+    if in_window(now):
         return "blocked", "inside block window %s-%s" % (config()["block_start"], config()["block_end"])
     return "open", "outside block window"
+
+
+def next_change():
+    """When the state next flips. Not simply the next clock boundary: an override ends before 06:00 and the
+    block comes back, and a force-block can end into an open evening or straight into the night's block."""
+    now = dt.datetime.now()
+    cur = desired_state(now)[0]
+    c = config()
+    times = [t for t in (active_until(OVERRIDE), active_until(FORCE)) if t]
+    for day in (0, 1, 2):
+        for s in (c["block_start"], c["block_end"]):
+            times.append(dt.datetime.combine(now.date() + dt.timedelta(days=day), parse_hhmm(s)))
+    for t in sorted(t for t in times if t > now):
+        if desired_state(t)[0] != cur:
+            return t
+    return next_boundary(now)
 
 
 _local_cache = {}
@@ -205,20 +233,27 @@ def is_local_host(host):
     """True for anything that lives on this Mac: localhost, *.local/*.localhost/*.test, and any name
     that resolves only to loopback addresses (/etc/hosts entries such as sleepbandit.test)."""
     host = host.lower().rstrip(".")
-    if host in ("localhost", "127.0.0.1", "::1") or host.startswith("127."):
+    if host == "localhost":
         return True
-    if host.endswith((".local", ".localhost", ".test")):
+    # Never by the look of the name alone: "127.example.com" starts with 127. and is an ordinary internet host,
+    # and the proxy (whose sockets pass the firewall) used to connect to it. Names are resolved; .local/.test
+    # names that resolve to a public address are refused.
+    where = _where(host)
+    if where == "local":
         return True
-    return _where(host) == "local"
+    return host.endswith((".local", ".localhost", ".test")) and where != "public"
 
 
 def _where(host):
-    """'local' (resolves only to loopback), 'tailnet' (only to Tailscale addresses) or 'other'. One lookup
-    answers both questions and is kept for 60 s: on some networks a lookup takes 5 s."""
+    """'local' (resolves only to loopback), 'tailnet' (only to Tailscale addresses), 'public' (at least one
+    globally routable address) or 'other' (private ranges, or no answer). One lookup answers every question
+    and is kept for 60 s: on some networks a lookup takes 5 s."""
     now = time.time()
     hit = _local_cache.get(host)
     if hit and now - hit[1] < 60:
         return hit[0]
+    if len(_local_cache) > 5000:   # the proxy runs for weeks and sees every hostname the Mac asks for
+        _local_cache.clear()
     where = "other"
     try:
         addrs = {ipaddress.ip_address(sa[0].split("%")[0])
@@ -227,6 +262,8 @@ def _where(host):
             where = "local"
         elif addrs and all(any(a in n for n in TAILNET_NETS) for a in addrs):
             where = "tailnet"
+        elif any(a.is_global for a in addrs):
+            where = "public"
     except (socket.gaierror, ValueError):
         pass
     _local_cache[host] = (where, now)
@@ -237,7 +274,7 @@ _tailnet_seen = set()  # names the proxy has let through as tailnet machines; to
 
 
 def resolves_inside_tailnet(host):
-    """True when every address of host is a Tailscale one (atlas, atlas.x.ts.net, 100.78.78.49). The proxy's
+    """True when every address of host is a Tailscale one (atlas, atlas.x.ts.net, 100.x.y.z). The proxy's
     sockets pass the firewall, so it has to make the firewall's check itself."""
     return _where(host.lower().rstrip(".")) == "tailnet"
 
@@ -420,7 +457,6 @@ def pf_apply_block(state):
         state["we_enabled_pf"] = True
         r = run(["pfctl", "-e"])
         log("pf enabled (rc=%d)" % r.returncode)
-    old = read_json(STATE, {}) or {}
     if rules != state.get("anchor_rules") or not pf_anchor_rules_loaded():
         with open(ANCHOR_FILE, "w") as f:
             f.write(rules)
@@ -504,6 +540,8 @@ def reconcile(force_open=False):
     os.makedirs(APP_DIR, exist_ok=True)
     os.makedirs(LOG_DIR, exist_ok=True)
     state = read_json(STATE, {}) or {}
+    state.pop("resolved_tailnet", None)   # written by the tailnet_hosts version of 2026-11-18
+    state.pop("tailnet_warned", None)
     if force_open:
         desired, why = "open", "unblock-now"
     else:
@@ -587,7 +625,7 @@ async def _handle(reader, writer):
             path = None
         elif target.startswith("/__nightblock__/"):
             st, why = desired_state()
-            until = (active_until(FORCE) or next_boundary()) if st == "blocked" else next_boundary()
+            until = next_change()
             c = config()
             body = json.dumps({"state": st, "why": why, "until": until.strftime("%-I:%M %p"),
                                "allow": list(c["allow_hosts"]) + list(c["direct_hosts"])
@@ -607,11 +645,11 @@ async def _handle(reader, writer):
                 return
             hostport, path = m.group(1), m.group(2) or "/"
             if hostport.startswith("["):
-                host, _, port = hostport.rpartition(":")
-                port = int(port) if port.isdigit() else 80
+                host, _, port = hostport.partition("]")
+                port = int(port[1:]) if port[1:].isdigit() else 80
             elif ":" in hostport:
                 host, port = hostport.rsplit(":", 1)
-                port = int(port)
+                port = int(port) if port.isdigit() else 80
             else:
                 host, port = hostport, 80
         host = host.strip("[]").lower()
@@ -623,9 +661,11 @@ async def _handle(reader, writer):
         if not allowed:
             now = time.time()
             if now - _denied_recent.get(host, 0) > 60:
+                if len(_denied_recent) > 5000:
+                    _denied_recent.clear()
                 _denied_recent[host] = now
                 proxy_log("DENIED %s:%d" % (host, port))
-            until = (active_until(FORCE) or next_boundary()).strftime("%-I:%M %p")
+            until = next_change().strftime("%-I:%M %p")
             writer.write(_http_response(
                 "403 Forbidden",
                 "<html><body style='font-family:-apple-system;margin:3em'><h2>Night block</h2>"
@@ -921,7 +961,7 @@ def status_main():
     if fo:
         print("  force-block:      active until %s" % fo.strftime("%H:%M"))
     print("  proxy:            %s on 127.0.0.1:%s" % ("listening" if proxy_listening() else "NOT RUNNING", c["proxy_port"]))
-    print("  next change:      %s" % next_boundary().strftime("%a %H:%M"))
+    print("  next change:      %s" % next_change().strftime("%a %H:%M"))
     print()
     print("During the block, what still works:")
     print("  - anything on this Mac: localhost, *.test, *.local, and /etc/hosts loopback names"
@@ -976,9 +1016,23 @@ def edit_list(name, value, add):
     if name not in LISTS:
         sys.exit("list must be one of %s" % ", ".join(LISTS))
     value = value.strip()
+    if name != "cover_apps":
+        # People paste what is in the address bar: keep the hostname of "https://Track.Toggl.com/timer?x=1".
+        value = re.sub(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", "", value).split("/")[0].split("?")[0].lower()
+        value = re.sub(r":\d+$", "", value).strip(".")
+        if add and not re.fullmatch(r"[a-z0-9*?_.\[\]-]+", value or ""):
+            sys.exit("not a hostname: %r" % value)
+        if add and name == "direct_hosts" and re.search(r"[*?\[]", value):
+            sys.exit("direct_hosts takes exact hostnames (the firewall needs their addresses); "
+                     "put the pattern %s in allow_hosts instead" % value)
     if not value:
         sys.exit("empty value")
-    c = read_json(CONFIG, {}) or {}
+    c = read_json(CONFIG)
+    if c is None and os.path.exists(CONFIG):
+        # read_json returns None for a file that does not parse; writing back would replace the whole config
+        # with this one entry
+        sys.exit("%s is not valid JSON; fix it first (sudo nano), nothing was changed" % CONFIG)
+    c = c or {}
     lst = c.setdefault(name, [])
     if add and value not in lst:
         lst.append(value)
@@ -1013,7 +1067,7 @@ def main(argv):
     elif cmd == "state-json":
         st, why = desired_state()
         c = config()
-        until = (active_until(FORCE) or next_boundary()) if st == "blocked" else next_boundary()
+        until = next_change()
         print(json.dumps({"state": st, "why": why, "until": until.strftime("%-I:%M %p"),
                           "proxy": proxy_listening(), "allow_hosts": c["allow_hosts"],
                           "direct_hosts": c["direct_hosts"], "cover_apps": c["cover_apps"]}))

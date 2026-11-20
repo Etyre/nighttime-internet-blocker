@@ -27,7 +27,7 @@ function shouldCover(st, url) {
   if (!st || st.state !== "blocked") return false;
   let host;
   try { host = new URL(url).hostname.toLowerCase(); } catch (e) { return false; }
-  if (host === "localhost" || host === "::1" || host.startsWith("127.") || host.endsWith(".local") ||
+  if (host === "localhost" || host === "[::1]" || /^127\.\d+\.\d+\.\d+$/.test(host) || host.endsWith(".local") ||
       host.endsWith(".localhost") || host.endsWith(".test") || st.local.has(host)) return false;
   return !st.res.some(re => re.test(host));
 }

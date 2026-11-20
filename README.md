@@ -129,7 +129,7 @@ nightblock status                 # anyone
 nightblock check docs.google.com
 nightblock denied                 # recently refused hostnames, for tuning the allowlist
 nightblock override               # lift the block for 60 min (asks nothing else; you type the paragraph)
-sudo nightblock allow HOST        # add a hostname pattern (fnmatch: *.example.com) to the proxy allowlist
+sudo nightblock allow HOST        # add a hostname pattern (fnmatch: *.example.com) to the proxy allowlist; a pasted URL is cut down to its hostname
 sudo nightblock disallow HOST
 sudo nightblock config-add direct_hosts HOST      # lists: allow_hosts | direct_hosts | cover_apps
 sudo nightblock config-remove direct_hosts HOST
@@ -156,7 +156,7 @@ D=$(mktemp -d); cp nightblock/config.example.json $D/config.json
 NIGHTBLOCK_APP_DIR=$D NIGHTBLOCK_LOG_DIR=$D /usr/bin/python3 nightblock/nightblock.py status
 NIGHTBLOCK_APP_DIR=$D NIGHTBLOCK_LOG_DIR=$D /usr/bin/python3 nightblock/nightblock.py check api.anthropic.com
 # during a real block, the agent's server must answer:
-curl -m 8 http://atlas.tail5a9488.ts.net:8800/health        # JSON
+curl -m 8 http://atlas.<tailnet>.ts.net:8800/health        # JSON
 ```
 
 Logs and state:
@@ -217,6 +217,25 @@ folder. After editing `background.js`, click the reload arrow on its card.
   decision (2026-11-18, the tailnet check) made unrelated requests hang for 5-10 s whenever some name resolved
   slowly; the decision now runs in a thread and caches for 60 s. A host with a dead IPv6 address
   (`s-gke-...firebaseio.com` on a network without IPv6) hung the same way until `happy_eyeballs_delay` was set.
+- Bugs found in a review on 2026-11-20, all fixed, kept here because each is easy to reintroduce:
+  - **The installed program must name its interpreter by full path.** `sudo nightblock override` needs no
+    password, and with `#!/usr/bin/env python3` root ran whichever `python3` was first in the caller's PATH
+    (Homebrew's, which the user can write to). `install.sh` now writes `#!/usr/bin/python3` (or whatever it
+    chose) into the installed copy.
+  - **"Local" is decided by the address, never by the look of the name.** `127.example.com` starts with `127.`
+    and is an ordinary internet host; the proxy, whose sockets pass the firewall, connected to it.
+  - **`read_json` returns nothing for a file that does not parse**, and `config-add` then wrote the config back
+    with only the new entry. It now refuses, `install.sh` refuses too, and the daemon logs an ERROR every
+    minute while the file is broken (it runs on defaults meanwhile: still blocked, nothing allowed).
+  - **A bad `block_start` / `block_end`** made every reconcile raise, so the block stayed frozen in whatever
+    state it was in. Bad times now fall back to 00:00 / 06:00 with an ERROR in the log.
+  - **"Next change" is not the next clock boundary.** During an override the menu said "blocks at 6:00 AM"
+    when the block returns as soon as the override ends; `next_change()` asks what the state will be at each
+    candidate time.
+  - **`install.sh` built the menu app only when `build/` was missing**, so a changed `NightBlockMenu.swift` was
+    never installed. It now rebuilds when anything in `menubar/` is newer than the built binary.
+  - **`direct_hosts` with a pattern** (`*.toggl.com`) was accepted and silently did nothing; it is refused with
+    a pointer to `allow_hosts`. A pasted URL is reduced to its hostname.
 - Only hostname granularity: allowing `docs.google.com` allows all of it. `nightblock denied` shows what the
   proxy refused so the allowlist can be tuned; patterns are fnmatch (`*.gstatic.com`, `clients?.google.com`).
 - Python/Node/curl are not proxy-aware, so hosts in `allow_hosts` only work from Chrome and Electron apps.

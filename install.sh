@@ -52,18 +52,26 @@ mkdir -p "$APP_DIR" "$LOG_DIR"
 chmod 755 "$APP_DIR" "$LOG_DIR"
 if [ -f "$APP_DIR/config.json" ]; then
   "$PY" - "$SEED" "$APP_DIR/config.json" <<'MERGE'
-import json, sys
+import json, os, sys
 new, cur_p = json.load(open(sys.argv[1])), sys.argv[2]
-cur = json.load(open(cur_p))
+try:
+    cur = json.load(open(cur_p))
+except ValueError as e:
+    sys.exit("ERROR: %s is not valid JSON (%s). Fix it, then rerun install.sh; nothing was installed." % (cur_p, e))
 for k, v in new.items():
     cur.setdefault(k, v)
-json.dump(cur, open(cur_p, "w"), indent=2)
+# written beside and renamed: the daemon and the proxy read this file every minute and must never see half of it
+json.dump(cur, open(cur_p + ".tmp", "w"), indent=2)
+os.replace(cur_p + ".tmp", cur_p)
 MERGE
 else
   cp "$SEED" "$APP_DIR/config.json"
 fi
 chmod 644 "$APP_DIR/config.json"
-install -m 755 -o root -g wheel "$HERE/nightblock/nightblock.py" "$BIN"
+# The installed copy names its interpreter by full path. `sudo nightblock override` needs no password, and with
+# "#!/usr/bin/env python3" it ran whichever python3 came first in the caller's PATH (Homebrew's, user-writable) as root.
+{ echo "#!$PY"; tail -n +2 "$HERE/nightblock/nightblock.py"; } > "$BIN.new"
+install -m 755 -o root -g wheel "$BIN.new" "$BIN"; rm -f "$BIN.new"
 touch "$LOG_DIR/nightblock.log" "$LOG_DIR/overrides.log" "$LOG_DIR/proxy.log" "$LOG_DIR/proxy.stderr.log"
 chmod 644 "$LOG_DIR"/*.log; chmod 666 "$LOG_DIR/nightblock.log"
 chown $PROXY_USER "$LOG_DIR/proxy.log" "$LOG_DIR/proxy.stderr.log"
@@ -127,7 +135,8 @@ printf '#!/bin/bash\nclear\necho "Editing the nightblock config (nano: ctrl-O to
 chmod 755 "$APP_DIR/edit-config.command"
 
 # 4c. Menu bar app + Dock app (built by menubar/build.sh; needs Xcode, so build as the user if missing)
-if [ ! -d "$HERE/build/Night Block.app" ]; then
+# Rebuild when a source is newer than the build: with "build only if missing" a changed menu app was never installed.
+if [ ! -d "$HERE/build/Night Block.app" ] || [ -n "$(find "$HERE/menubar" -type f -newer "$HERE/build/Night Block.app/Contents/MacOS/NightBlockMenu" 2>/dev/null)" ]; then
   sudo -u "$OWNER" "$HERE/menubar/build.sh" || echo "warning: could not build the menu bar / Dock apps"
 fi
 if [ -d "$HERE/build/Night Block.app" ]; then
