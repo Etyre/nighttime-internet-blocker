@@ -3,9 +3,9 @@
 Blocks the internet on this Mac from **00:00 to 06:00** every day, with a short allowlist, and a
 60-minute override you have to type out by hand. Built 2026-10-31 because the block has to survive sleep and
 reboots (so it is a reconciler, not a timer) and the override has to cost deliberate effort, while Backblaze,
-macOS updates and the local tools (Sleep Bandit, Task Tracker, Roam) keep working. Claude Code is deliberately
-not on the allowlist: it shares `api.anthropic.com` with Sleep Bandit and Task Tracker, and the firewall cannot
-tell processes apart, so the host is closed to everyone at night. Do not add it back to `direct_hosts`.
+macOS updates and the tools Eli works with at night keep working: the local ones (Task Tracker, Focus Monitor),
+everything on his Tailscale network (the assistant's server, Sleep Bandit), Google Docs and Calendar, Toggl,
+Roam, Signal, and the Anthropic API, which Claude Code and the local tools share.
 
 ## How it works
 
@@ -41,10 +41,12 @@ Three launchd jobs plus two small apps and a Chrome extension:
 |---|---|
 | Websites, Filtered Twitter, Slack, mail sync, app updaters running as you | **blocked** (connections are refused immediately, nothing hangs) |
 | Open browser tabs | stay open; they just won't reload until 06:00 |
-| Anything on this Mac: localhost, `*.test`, `*.local`, and `/etc/hosts` loopback names such as Sleep Bandit at `sleepbandit.test:8777`, Task Tracker (8791), Roam local | works, in Chrome too (never covered) |
-| Google Docs/Sheets in Chrome (daily checklist) | works, via the local proxy, allowlisted by hostname |
+| Anything on this Mac: localhost, `*.test`, `*.local`, and `/etc/hosts` loopback names: Task Tracker (8791), Focus Monitor (8790), Roam local | works, in Chrome too (never covered) |
+| Google Docs/Sheets (daily checklist) and Google Calendar in Chrome | works, via the local proxy, allowlisted by hostname |
+| The Anthropic API (`api.anthropic.com`, `console.anthropic.com`, `platform.claude.com`): Claude Code, Task Tracker's LLM plans, any script | works, from any app, by IP |
+| Signal (its servers are open and it is not in `cover_apps`) | works |
 | Oura and Open-Meteo APIs (Sleep Bandit's ring and weather data) | work, from any app, by IP |
-| Every machine on the Tailscale network, every port (the agent's server `atlas`: Atlas Mac app on :8800, Sleep Bandit on :8777, ssh) | works, from any app |
+| Every machine on the Tailscale network, every port (the agent's server `atlas`: Atlas Mac app on :8800, Sleep Bandit on :8777 since it moved there on 2026-11-17, ssh) | works, from any app |
 | The internet through a Tailscale exit node | **blocked** |
 | Connections from a Tailscale machine into this Mac (the agent's bridge on :8799) | work (inbound is never blocked) |
 | Backblaze and macOS system updates (run as root) | work |
@@ -52,7 +54,7 @@ Three launchd jobs plus two small apps and a Chrome extension:
 | Toggl Track: the web app in Chrome, the desktop app, and the API for scripts (Task Tracker's and the Focus Monitor's Toggl sync) | works (added 2026-11-19) |
 | Roam Research: the desktop app and roamresearch.com in Chrome (added 2026-11-19) | works, via the local proxy |
 | Task Tracker's Google Sheets sync (Python, not proxy-aware) | blocked until 06:00 |
-| Claude Code, and anything else on the Anthropic API (Sleep Bandit's night tagging, Task Tracker's LLM plans) | **blocked** until 06:00 |
+| claude.ai in a browser, and the Claude Chrome connector | **blocked** until 06:00 |
 
 `nightblock status` prints the live version of this list plus the hosts the proxy refused recently.
 `nightblock check <host>` says what would happen to one host.
@@ -63,7 +65,7 @@ Three launchd jobs plus two small apps and a Chrome extension:
   not allowlisted while the block is on, and pauses any playing media. Tabs are not closed or reloaded; the
   panel lifts at 06:00 or on override. It asks the local proxy for the state every 30 s (and when a tab finishes
   loading); if the proxy is not running it treats everything as open.
-- **Desktop apps**: `cover_apps` in the config (Filtered Twitter, Slack, Discord, WhatsApp, Signal by default)
+- **Desktop apps**: `cover_apps` in the config (Filtered Twitter, Slack, Discord, WhatsApp by default)
   are hidden every 5 s while blocked. They keep running; Cmd-Tab shows one for a few seconds at most.
 
 ### Menu bar and Dock
@@ -189,9 +191,13 @@ folder. After editing `background.js`, click the reload arrow on its card.
 
 ## Gotchas learned
 
-- Claude Code and Sleep Bandit / Task Tracker all talk to `api.anthropic.com`, and pf only sees IPs and
-  socket owners, not processes. Allowing the host for one allows it for all, so it is blocked for all. Do not
-  add `api.anthropic.com`, `console.anthropic.com` or `platform.claude.com` back to `direct_hosts`.
+- Claude Code, Task Tracker and every other script talk to the same `api.anthropic.com`, and pf only sees IPs
+  and socket owners, not processes: the host is open to all of them or to none. The first version closed it
+  (to keep Claude Code out at night); Eli reopened it, with `console.anthropic.com` and `platform.claude.com`,
+  and it is in the shipped defaults since 2026-11-20. This README said "do not add it back" for weeks after
+  the installed config had it; when the lists change, change the table above in the same commit.
+- `config.example.json` is kept equal to the lists installed on Eli's Mac (checked 2026-11-20), so a fresh
+  install behaves like the running one. It contains hostnames only, nothing private.
 - `install.sh` merges the shipped config into the installed one with "add missing keys only": it never removes
   an entry you (or an older config) added. Removing a host from `config.example.json` does nothing to the
   installed `/Library/Application Support/nightblock/config.json`; use `sudo nightblock config-remove ...`.

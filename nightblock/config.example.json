@@ -17,6 +17,8 @@
     "apis.google.com",
     "clients?.google.com",
     "ogs.google.com",
+    "calendar.google.com",
+    "*.clients6.google.com",
     "*.toggl.com",
     "roamresearch.com",
     "*.roamresearch.com",
@@ -27,11 +29,27 @@
     "www.googleapis.com"
   ],
   "direct_hosts": [
+    "api.anthropic.com",
     "api.ouraring.com",
     "cloud.ouraring.com",
     "api.open-meteo.com",
     "archive-api.open-meteo.com",
     "geocoding-api.open-meteo.com",
+    "console.anthropic.com",
+    "platform.claude.com",
+    "calendar.google.com",
+    "calendar-pa.clients6.google.com",
+    "signaler-pa.clients6.google.com",
+    "apis.google.com",
+    "accounts.google.com",
+    "ssl.gstatic.com",
+    "www.gstatic.com",
+    "chat.signal.org",
+    "storage.signal.org",
+    "cdn.signal.org",
+    "cdn2.signal.org",
+    "cdn3.signal.org",
+    "cdsi.signal.org",
     "track.toggl.com",
     "api.track.toggl.com",
     "desktop.track.toggl.com",
@@ -44,7 +62,6 @@
     "Filtered Twitter",
     "Slack",
     "Discord",
-    "WhatsApp",
-    "Signal"
+    "WhatsApp"
   ]
 }
