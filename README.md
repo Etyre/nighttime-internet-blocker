@@ -43,6 +43,7 @@ Three launchd jobs plus two small apps and a Chrome extension:
 | Open browser tabs | stay open; they just won't reload until 06:00 |
 | Anything on this Mac: localhost, `*.test`, `*.local`, and `/etc/hosts` loopback names: Task Tracker (8791), Focus Monitor (8790), Roam local | works, in Chrome too (never covered) |
 | Google Docs/Sheets (daily checklist) and Google Calendar in Chrome | works, via the local proxy, allowlisted by hostname |
+| Google Calendar API for native apps and scripts (meeting-alerts: `www.googleapis.com`, `oauth2.googleapis.com`; added 2026-11-21) | works, from any app, by IP |
 | The Anthropic API (`api.anthropic.com`, `console.anthropic.com`, `platform.claude.com`): Claude Code, Task Tracker's LLM plans, any script | works, from any app, by IP |
 | Signal (its servers are open and it is not in `cover_apps`) | works |
 | Oura and Open-Meteo APIs (Sleep Bandit's ring and weather data) | work, from any app, by IP |
@@ -242,6 +243,9 @@ folder. After editing `background.js`, click the reload arrow on its card.
     never installed. It now rebuilds when anything in `menubar/` is newer than the built binary.
   - **`direct_hosts` with a pattern** (`*.toggl.com`) was accepted and silently did nothing; it is refused with
     a pointer to `allow_hosts`. A pasted URL is reduced to its hostname.
+- Native macOS apps run by launchd (meeting-alerts) may not use the system proxy, so a host they need must be in
+  `direct_hosts`; `allow_hosts` alone is not enough. meeting-alerts fell back to its stale calendar copy at
+  00:00 on 2026-11-21 until `www.googleapis.com` was added there.
 - Only hostname granularity: allowing `docs.google.com` allows all of it. `nightblock denied` shows what the
   proxy refused so the allowlist can be tuned; patterns are fnmatch (`*.gstatic.com`, `clients?.google.com`).
 - Python/Node/curl are not proxy-aware, so hosts in `allow_hosts` only work from Chrome and Electron apps.

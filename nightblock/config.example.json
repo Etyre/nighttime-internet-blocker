@@ -55,7 +55,9 @@
     "desktop.track.toggl.com",
     "sync.toggl.com",
     "accounts.toggl.com",
-    "web-assets.track.toggl.com"
+    "web-assets.track.toggl.com",
+    "www.googleapis.com",
+    "oauth2.googleapis.com"
   ],
   "allow_tailnet": true,
   "cover_apps": [
